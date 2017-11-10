@@ -7,6 +7,8 @@
 
 #define DHTTYPE DHT11   // DHT 11
 
+const float HYSTERESIS=1.0 // hysteresis to take in account for switching the heating -> 18 temp setted, hysteresis 2 -> temp: 16 -> switch on, until temp is 20, temp 20 -> switch of , temp: 16 -> switch on
+
 // Connect pin 1 (on the left) of the sensor to +5V
 // NOTE: If using a board with 3.3V logic like an Arduino Due connect pin 1
 // to 3.3V instead of 5V!
@@ -82,9 +84,23 @@ void updateConfig(String json_settings) {
   return;
 }
 
+boolean relay_is_on() {
+  return true;
+}
+
+boolean set_relay(boolean value) {
+  return value:
+}
+
+float get_temp_from_time(String time) {
+  return 19.0;
+}
+
 boolean checkHeating(String time, float t) {
   //TODO: check if is needed to activate the relay and so powering on the heating system
-  return true;
+  if( ( t < (get_temp_from_time(time) - HYSTERESIS) ) || ( relay_is_on() && ( t <= (get_temp_from_time(time) + HYSTERESIS) ) ) )
+    return set_relay(true);
+  return set_relay(false);
 }
 
 void setup() {
