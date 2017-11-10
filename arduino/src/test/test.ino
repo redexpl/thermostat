@@ -7,6 +7,7 @@
 #define RELAYPIN 10   // what digital pin RELAY is connected to
 
 #define DHTTYPE DHT11   // DHT 11
+#define GMT 1
 
 const float HYSTERESIS=1.0 // hysteresis to take in account for switching the heating -> 18 temp setted, hysteresis 2 -> temp: 16 -> switch on, until temp is 20, temp 20 -> switch of , temp: 16 -> switch on
 const float OFF_TEMP=-127.0;
@@ -140,6 +141,22 @@ void updateConfig(String json_settings) {
   return;
 }
 
+int get_hour_from_time(String times) {
+  return times.substring(17,19).toInt();
+}
+
+int get_day_of_the_week_from_time(String times) {
+  String t = times.substring(0,3);
+  if(t=='Mon') return 0;
+  else if(t=='Tue') return 1;
+  else if(t=='Wed') return 2;
+  else if(t=='Thu') return 3;
+  else if(t=='Fri') return 4;
+  else if(t=='Sat') return 5;
+  else if(t=='Sun') return 6;
+  return -1;
+}
+
 boolean relay_is_on() {
   //TODO: return relay state
   return true;
@@ -150,10 +167,9 @@ boolean set_relay(boolean value) {
   return value:
 }
 
-float get_temp_from_time(String time) {
+float get_temp_from_time(String times) {
   if(mode!=2) return temp;
-  //TODO: get day of the week and hour
-  int dof=0,hour=1,i;
+  int dof=get_day_of_the_week_from_time(times),hour=get_hour_from_time(times),i;
   day_wp d=wp->days[dof];
   hour_dwp hdwp;
   if(d==NULL) return OFF_TEMP;
@@ -165,8 +181,8 @@ float get_temp_from_time(String time) {
   return OFF_TEMP;
 }
 
-boolean checkHeating(String time, float t) {
-  if( ( t < (get_temp_from_time(time) - HYSTERESIS) ) || ( relay_is_on() && ( t <= (get_temp_from_time(time) + HYSTERESIS) ) ) )
+boolean checkHeating(String times, float t) {
+  if( ( t < (get_temp_from_time(times) - HYSTERESIS) ) || ( relay_is_on() && ( t <= (get_temp_from_time(times) + HYSTERESIS) ) ) )
     return set_relay(true);
   return set_relay(false);
 }
