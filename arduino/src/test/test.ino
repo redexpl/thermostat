@@ -142,7 +142,7 @@ void updateConfig(String json_settings) {
 }
 
 int get_hour_from_time(String times) {
-  return times.substring(17,19).toInt();
+  return (times.substring(17,19).toInt()) + GMT;
 }
 
 int get_day_of_the_week_from_time(String times) {
