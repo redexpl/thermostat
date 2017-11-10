@@ -1,24 +1,95 @@
 #include <ESP8266MQTTClient.h>
 #include <ESP8266WiFi.h>
-//TODO: find labrary for esp or adafruit library work also for esp8266???
+#include "DHT.h"
 
-#define DHTPIN            2         // Pin which is connected to the DHT sensor.
-// Uncomment the type of sensor in use:
-#define DHTTYPE           DHT11     // DHT 11 
-DHT_Unified dht(DHTPIN, DHTTYPE);
+#define DHTPIN 2      // what digital pin DHT is connected to
+#define RELAYPIN 10   // what digital pin RELAY is connected to
+
+#define DHTTYPE DHT11   // DHT 11
+
+// Connect pin 1 (on the left) of the sensor to +5V
+// NOTE: If using a board with 3.3V logic like an Arduino Due connect pin 1
+// to 3.3V instead of 5V!
+// Connect pin 2 of the sensor to whatever your DHTPIN is
+// Connect pin 4 (on the right) of the sensor to GROUND
+// Connect a 10K resistor from pin 2 (data) to pin 1 (power) of the sensor
+
+DHT dht(DHTPIN, DHTTYPE);
+
 MQTTClient mqtt;
 
-#define TOPIC_SETTINGS "/thermostat/config"
-#define TOPIC_DATA "/thermostat/sensor"
+const char* TOPIC_SETTINGS "/thermostat/config"
+const char* TOPIC_DATA "/thermostat/sensor"
+const char* WIFI_SSID "ssid"
+const char* WIFI_PASS "pswd"
+
+
+void initWifi() {
+   Serial.print("Connecting to ");
+   Serial.print(ssid);
+   if (strcmp (WiFi.SSID(),ssid) != 0) {
+       WiFi.begin(WIFI_SSID, WIFI_PASS);
+       // WiFi fix: https://github.com/esp8266/Arduino/issues/2186
+       WiFi.persistent(false);
+       WiFi.mode(WIFI_OFF);
+       WiFi.mode(WIFI_STA);
+       WiFi.begin(WIFI_SSID, WIFI_PASS);
+   }
+
+   while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+   }
+  Serial.print("\nWiFi connected, IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+String getTime() {
+  WiFiClient client;
+  while (!!!client.connect("google.com", 80)) {
+    Serial.println("connection failed, retrying...");
+  }
+
+  client.print("HEAD / HTTP/1.1\r\n\r\n");
+ 
+  while(!!!client.available()) {
+     yield();
+  }
+
+  while(client.available()){
+    if (client.read() == '\n') {   
+      if (client.read() == 'D') {   
+        if (client.read() == 'a') {   
+          if (client.read() == 't') {   
+            if (client.read() == 'e') {   
+              if (client.read() == ':') {   
+                client.read();
+                String theDate = client.readStringUntil('\r');
+                client.stop();
+                return theDate;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 
 void updateConfig(String json_settings) {
   //TODO: update weekly time and temperature
   return;
 }
 
+boolean checkHeating(String time, float t) {
+  //TODO: check if is needed to activate the relay and so powering on the heating system
+  return true;
+}
+
 void setup() {
   Serial.begin(115200);
-  WiFi.begin("ssid", "pass");
+  initWifi();
 
   dht.begin();
 
@@ -44,64 +115,30 @@ void setup() {
   });
 
   mqtt.begin("mqtt://test.mosquitto.org:1883");
-//  mqtt.begin("mqtt://test.mosquitto.org:1883", {.lwtTopic = "hello", .lwtMsg = "offline", .lwtQos = 0, .lwtRetain = 0});
-//  mqtt.begin("mqtt://user:pass@mosquito.org:1883");
-//  mqtt.begin("mqtt://user:pass@mosquito.org:1883#clientId");
 
-}
-
-void loop() {
   mqtt.handle();
 
-  //TODO: read data from DHT11 sensor
-  // Get temperature event and print its value.
-  String json="{";
-  boolean error=false;
-  sensors_event_t event;  
-
-  // Get temperature event
-  dht.temperature().getEvent(&event);
-  if (isnan(event.temperature)) {
-    Serial.println("Error reading temperature!");
-    error=true;
-  }
-  else {
-    Serial.print("Temperature: ");
-    Serial.print(event.temperature);
-    Serial.println(" *C");
-    json += " \"temp\": " + event.temperature;
-  }
-  
-  // Get humidity event
-  dht.humidity().getEvent(&event);
-  if (isnan(event.relative_humidity) || error) {
-    Serial.println("Error reading humidity!");
-    error=true;
-  }
-  else {
-    Serial.print("Humidity: ");
-    Serial.print(event.relative_humidity);
-    Serial.println("%");
-    json += " , \"hum\": " + event.relative_humidity;
-  }
+  //TODO: read data from DHT11 sensor 
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+  String json="{ \"Temp\": " + t + " , \"Hum\": " + h ;
   
   //TODO: get time
-  if(!error)
-    json+=" , \"time\": \"20171011-19:12:00\""
+  String time=getTime();
+    json+=" , \"time\": " + time;
 
   //TODO: update relay status ON/OFF based on weekly temperature
-  if(!error)
-    json+=" , \"heating\": \"ON\"";
-
-
-  if(error)
-    json="{ \"Success\": " + false + "}";
-  else
-    json+=" , \"Success\": " + true + "}";
+  boolean heating = checkHeating(time, t);
+  json+=" , \"heating\": \"" (heating) ? "ON" : "OFF" "\" }";
   
   //TODO: publish data
   mqtt.publish(TOPIC_DATA, json , 0, 0);
   
   //TODO: some sort of low power mode -> sleep for n seconds
+  Serial.println("Going into deep sleep for 100 seconds");
+  ESP.deepSleep(100e6); // 100e6 is 100 seconds
 
+}
+
+void loop() {
 }
