@@ -1,14 +1,20 @@
-#include <ESP8266MQTTClient.h> //TODO: change this with my forked version
+#include <ESP8266MQTTClient.h>
 #include <ESP8266WiFi.h>
-#include <Adafruit_Sensor.h>
-#include <DHT.h>
-#include <DHT_U.h>
+//TODO: find labrary for esp or adafruit library work also for esp8266???
 
 #define DHTPIN            2         // Pin which is connected to the DHT sensor.
 // Uncomment the type of sensor in use:
 #define DHTTYPE           DHT11     // DHT 11 
 DHT_Unified dht(DHTPIN, DHTTYPE);
 MQTTClient mqtt;
+
+#define TOPIC_SETTINGS "/thermostat/config"
+#define TOPIC_DATA "/thermostat/sensor"
+
+void updateConfig(String json_settings) {
+  //TODO: update weekly time and temperature
+  return;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -23,21 +29,18 @@ void setup() {
 
   //topic, data, data is continuing
   mqtt.onData([](String topic, String data, bool cont) {
-    //TODO: update weekly time and temperature
     Serial.printf("Data received, topic: %s, data: %s\r\n", topic.c_str(), data.c_str());
-    mqtt.unSubscribe("/qos0");
+    if(topic.c_str() == TOPIC_SETTINGS)
+      updateConfig(data.c_str());
   });
 
   mqtt.onSubscribe([](int sub_id) {
     Serial.printf("Subscribe topic id: %d ok\r\n", sub_id);
-    mqtt.publish("/qos0", "qos0", 0, 0);
   });
   
   mqtt.onConnect([]() {
     Serial.printf("MQTT: Connected\r\n");
-    Serial.printf("Subscribe id: %d\r\n", mqtt.subscribe("/qos0", 0));
-//    mqtt.subscribe("/qos1", 1);
-//    mqtt.subscribe("/qos2", 2);
+    Serial.printf("Subscribe id: %d\r\n", mqtt.subscribe(TOPIC_SETTINGS));
   });
 
   mqtt.begin("mqtt://test.mosquitto.org:1883");
@@ -52,33 +55,53 @@ void loop() {
 
   //TODO: read data from DHT11 sensor
   // Get temperature event and print its value.
+  String json="{";
+  boolean error=false;
   sensors_event_t event;  
+
+  // Get temperature event
   dht.temperature().getEvent(&event);
   if (isnan(event.temperature)) {
     Serial.println("Error reading temperature!");
+    error=true;
   }
   else {
     Serial.print("Temperature: ");
     Serial.print(event.temperature);
     Serial.println(" *C");
+    json += " \"temp\": " + event.temperature;
   }
-  // Get humidity event and print its value.
+  
+  // Get humidity event
   dht.humidity().getEvent(&event);
-  if (isnan(event.relative_humidity)) {
+  if (isnan(event.relative_humidity) || error) {
     Serial.println("Error reading humidity!");
+    error=true;
   }
   else {
     Serial.print("Humidity: ");
     Serial.print(event.relative_humidity);
     Serial.println("%");
+    json += " , \"hum\": " + event.relative_humidity;
   }
   
   //TODO: get time
+  if(!error)
+    json+=" , \"time\": \"20171011-19:12:00\""
 
   //TODO: update relay status ON/OFF based on weekly temperature
+  if(!error)
+    json+=" , \"heating\": \"ON\"";
 
+
+  if(error)
+    json="{ \"Success\": " + false + "}";
+  else
+    json+=" , \"Success\": " + true + "}";
+  
   //TODO: publish data
-
+  mqtt.publish(TOPIC_DATA, json , 0, 0);
+  
   //TODO: some sort of low power mode -> sleep for n seconds
 
 }
