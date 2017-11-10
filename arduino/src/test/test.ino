@@ -1,5 +1,6 @@
 #include <ESP8266MQTTClient.h>
 #include <ESP8266WiFi.h>
+#include <ArduinoJson.h>
 #include "DHT.h"
 
 #define DHTPIN 2      // what digital pin DHT is connected to
@@ -8,6 +9,7 @@
 #define DHTTYPE DHT11   // DHT 11
 
 const float HYSTERESIS=1.0 // hysteresis to take in account for switching the heating -> 18 temp setted, hysteresis 2 -> temp: 16 -> switch on, until temp is 20, temp 20 -> switch of , temp: 16 -> switch on
+const float OFF_TEMP=-127.0;
 
 // Connect pin 1 (on the left) of the sensor to +5V
 // NOTE: If using a board with 3.3V logic like an Arduino Due connect pin 1
@@ -24,6 +26,23 @@ const char* TOPIC_SETTINGS "/thermostat/config"
 const char* TOPIC_DATA "/thermostat/sensor"
 const char* WIFI_SSID "ssid"
 const char* WIFI_PASS "pswd"
+
+typedef struct {
+  int hours[2]; //ora inizio (indice 0) e ora dine (indice 1)
+  float t;      //temperatura per il range di ore
+} *hour_dwp;
+
+typedef struct {
+  hour_dwp hours_intervals;
+  int n;
+} *day_wp;
+
+typedef struct {
+  day_wp days[7];
+} *week_program;
+
+int mode, temp;
+week_program wp=NULL;
 
 
 void initWifi() {
@@ -80,24 +99,73 @@ String getTime() {
 
 
 void updateConfig(String json_settings) {
-  //TODO: update weekly time and temperature
+  int i,j,n;
+  StaticJsonBuffer<1024> jsonBuffer;
+  JsonObject& root = jsonBuffer.parseObject(json), hour_entry;
+  JsonArray& days, hours;
+  if (!root.success())
+  {
+    Serial.println("parseObject() failed");
+    return;
+  }
+  if(root["mode"] == "OFF") {
+    mode=0;
+    temp=root["t"];
+  } else if(root["mode"] == "ON")
+    mode=1;
+    temp=OFF_TEMP;
+  } else {
+    mode=2;
+    wp=malloc(sizeof(*wp));
+    days=root["days"];
+    for(i=0;i<7;i++) {
+      hours=days[i];
+      n=hours.size();
+      if(n!=0)
+        wp->days[i]=malloc(sizeof(*(wp->days[i])));
+      else {
+        wp->days[i]=NULL;
+        continue;
+      }
+      wp->days[i]->n=n;
+      wp->days[i]->hours_intervals=malloc(sizeof(*(wp->days[i]->hours_intervals))) * n);
+      for(j=0;j<n;j++) {
+        hour_entry=hours[j];
+        wp->days[i]->hours_intervals[j]->t=hour_entry["t"];
+        wp->days[i]->hours_intervals[j]->hours[0]=hour_entry["h_i"];
+        wp->days[i]->hours_intervals[j]->hours[1]=hour_entry["h_e"];
+      }
+    }
+  }
   return;
 }
 
 boolean relay_is_on() {
+  //TODO: return relay state
   return true;
 }
 
 boolean set_relay(boolean value) {
+  //TODO: change relay state
   return value:
 }
 
 float get_temp_from_time(String time) {
-  return 19.0;
+  if(mode!=2) return temp;
+  //TODO: get day of the week and hour
+  int dof=0,hour=1,i;
+  day_wp d=wp->days[dof];
+  hour_dwp hdwp;
+  if(d==NULL) return OFF_TEMP;
+  for(i=0;i<d->n;i++) {
+    hdwp=d->hours_intervals[i];
+    if((hour >= hdwp->hours[0]) && (hour <= hdwp->hours[1]))
+      return hdwp->t;
+  }
+  return OFF_TEMP;
 }
 
 boolean checkHeating(String time, float t) {
-  //TODO: check if is needed to activate the relay and so powering on the heating system
   if( ( t < (get_temp_from_time(time) - HYSTERESIS) ) || ( relay_is_on() && ( t <= (get_temp_from_time(time) + HYSTERESIS) ) ) )
     return set_relay(true);
   return set_relay(false);
@@ -109,11 +177,8 @@ void setup() {
 
   dht.begin();
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
+  mode=0; //start with OFF
+  
   //topic, data, data is continuing
   mqtt.onData([](String topic, String data, bool cont) {
     Serial.printf("Data received, topic: %s, data: %s\r\n", topic.c_str(), data.c_str());
@@ -149,6 +214,15 @@ void setup() {
   
   //TODO: publish data
   mqtt.publish(TOPIC_DATA, json , 0, 0);
+
+  //TODO: free wp structure
+  for(int i=0;i<7;i++) {
+    if(wp->days[i]==NULL) continue;
+    for(int j=0;j<wp->days[i]->n;j++)
+      free(wp->days[i]->hours_intervals[j]);
+    free(wp->days[i]);
+  }
+  free(wp);
   
   //TODO: some sort of low power mode -> sleep for n seconds
   Serial.println("Going into deep sleep for 100 seconds");
