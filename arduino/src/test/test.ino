@@ -43,12 +43,15 @@ typedef struct {
 } *week_program;
 
 int mode, temp;
+boolean relay;
 week_program wp=NULL;
 
 
 void initWifi() {
    Serial.print("Connecting to ");
    Serial.print(ssid);
+   WiFi.mode(WIFI_STA);
+   wifi_set_sleep_type(LIGHT_SLEEP_T);
    if (strcmp (WiFi.SSID(),ssid) != 0) {
        WiFi.begin(WIFI_SSID, WIFI_PASS);
        // WiFi fix: https://github.com/esp8266/Arduino/issues/2186
@@ -98,8 +101,22 @@ String getTime() {
   }
 }
 
+void free_wp() {
+  if(wp==NULL) return;
+  int i,j;
+  //TODO: free wp structure
+  for(i=0;i<7;i++) {
+    if(wp->days[i]==NULL) continue;
+    for(j=0;j<wp->days[i]->n;j++)
+      free(wp->days[i]->hours_intervals[j]);
+    free(wp->days[i]);
+  }
+  free(wp);
+}
+
 
 void updateConfig(String json_settings) {
+  free_wp();
   int i,j,n;
   StaticJsonBuffer<1024> jsonBuffer;
   JsonObject& root = jsonBuffer.parseObject(json), hour_entry;
@@ -157,14 +174,13 @@ int get_day_of_the_week_from_time(String times) {
   return -1;
 }
 
-boolean relay_is_on() {
-  //TODO: return relay state
-  return true;
-}
-
-boolean set_relay(boolean value) {
-  //TODO: change relay state
-  return value:
+void set_relay(boolean value) {
+  relay=value;
+  if(value)
+    digitalWrite(RELAYPIN, HIGH);
+  else
+    digitalWrite(RELAYPIN, LOW);
+  return;
 }
 
 float get_temp_from_time(String times) {
@@ -181,13 +197,16 @@ float get_temp_from_time(String times) {
   return OFF_TEMP;
 }
 
-boolean checkHeating(String times, float t) {
-  if( ( t < (get_temp_from_time(times) - HYSTERESIS) ) || ( relay_is_on() && ( t <= (get_temp_from_time(times) + HYSTERESIS) ) ) )
-    return set_relay(true);
-  return set_relay(false);
+void checkHeating(String times, float t) {
+  if( ( t < (get_temp_from_time(times) - HYSTERESIS) ) || ( relay && ( t <= (get_temp_from_time(times) + HYSTERESIS) ) ) )
+    set_relay(true);
+  else
+    set_relay(false);
+  return;
 }
 
 void setup() {
+  set_relay(false);
   Serial.begin(115200);
   initWifi();
 
@@ -213,6 +232,9 @@ void setup() {
 
   mqtt.begin("mqtt://test.mosquitto.org:1883");
 
+}
+
+void loop() {
   mqtt.handle();
 
   //TODO: read data from DHT11 sensor 
@@ -225,26 +247,14 @@ void setup() {
     json+=" , \"time\": " + time;
 
   //TODO: update relay status ON/OFF based on weekly temperature
-  boolean heating = checkHeating(time, t);
-  json+=" , \"heating\": \"" (heating) ? "ON" : "OFF" "\" }";
+  checkHeating(time, t);
+  json+=" , \"heating\": \"" + ((relay) ? "ON" : "OFF") + "\" }";
   
   //TODO: publish data
   mqtt.publish(TOPIC_DATA, json , 0, 0);
 
-  //TODO: free wp structure
-  for(int i=0;i<7;i++) {
-    if(wp->days[i]==NULL) continue;
-    for(int j=0;j<wp->days[i]->n;j++)
-      free(wp->days[i]->hours_intervals[j]);
-    free(wp->days[i]);
-  }
-  free(wp);
   
   //TODO: some sort of low power mode -> sleep for n seconds
-  Serial.println("Going into deep sleep for 100 seconds");
-  ESP.deepSleep(100e6); // 100e6 is 100 seconds
-
-}
-
-void loop() {
+  Serial.println("Going into light sleep for 60 seconds");
+  delay(60e3)
 }
