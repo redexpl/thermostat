@@ -9,7 +9,7 @@
 #define DHTTYPE DHT11   // DHT 11
 #define GMT 1
 
-const float HYSTERESIS=1.0 // hysteresis to take in account for switching the heating -> 18 temp setted, hysteresis 2 -> temp: 16 -> switch on, until temp is 20, temp 20 -> switch of , temp: 16 -> switch on
+const float HYSTERESIS=1.0; // hysteresis to take in account for switching the heating -> 18 temp setted, hysteresis 2 -> temp: 16 -> switch on, until temp is 20, temp 20 -> switch of , temp: 16 -> switch on
 const float OFF_TEMP=-127.0;
 
 // Connect pin 1 (on the left) of the sensor to +5V
@@ -23,10 +23,10 @@ DHT dht(DHTPIN, DHTTYPE);
 
 MQTTClient mqtt;
 
-const char* TOPIC_SETTINGS "/thermostat/config"
-const char* TOPIC_DATA "/thermostat/sensor"
-const char* WIFI_SSID "ssid"
-const char* WIFI_PASS "pswd"
+const char* TOPIC_SETTINGS="/thermostat/config";
+const char* TOPIC_DATA="/thermostat/sensor";
+const char* WIFI_SSID="ssid";
+const char* WIFI_PASS="pswd";
 
 typedef struct {
   int hours[2]; //ora inizio (indice 0) e ora dine (indice 1)
@@ -34,7 +34,7 @@ typedef struct {
 } *hour_dwp;
 
 typedef struct {
-  hour_dwp hours_intervals;
+  hour_dwp *hours_intervals;
   int n;
 } *day_wp;
 
@@ -49,10 +49,10 @@ week_program wp=NULL;
 
 void initWifi() {
    Serial.print("Connecting to ");
-   Serial.print(ssid);
+   Serial.print(WIFI_SSID);
    WiFi.mode(WIFI_STA);
-   wifi_set_sleep_type(LIGHT_SLEEP_T);
-   if (strcmp (WiFi.SSID(),ssid) != 0) {
+   //wifi_set_sleep_type(LIGHT_SLEEP_T);
+   if (WiFi.SSID() != WIFI_SSID) {
        WiFi.begin(WIFI_SSID, WIFI_PASS);
        // WiFi fix: https://github.com/esp8266/Arduino/issues/2186
        WiFi.persistent(false);
@@ -108,7 +108,8 @@ void free_wp() {
   for(i=0;i<7;i++) {
     if(wp->days[i]==NULL) continue;
     for(j=0;j<wp->days[i]->n;j++)
-      free(wp->days[i]->hours_intervals[j]);
+      free((void*)((hour_dwp)(((day_wp)wp->days[i])->hours_intervals[j])));
+    free(wp->days[i]->hours_intervals);
     free(wp->days[i]);
   }
   free(wp);
@@ -119,8 +120,9 @@ void updateConfig(String json_settings) {
   free_wp();
   int i,j,n;
   StaticJsonBuffer<1024> jsonBuffer;
-  JsonObject& root = jsonBuffer.parseObject(json), hour_entry;
-  JsonArray& days, hours;
+  JsonObject& root = jsonBuffer.parseObject(json_settings);
+  //JsonObject hour_entry;
+//  JsonArray& days, hours;
   if (!root.success())
   {
     Serial.println("parseObject() failed");
@@ -129,26 +131,26 @@ void updateConfig(String json_settings) {
   if(root["mode"] == "OFF") {
     mode=0;
     temp=root["t"];
-  } else if(root["mode"] == "ON")
+  } else if(root["mode"] == "ON") {
     mode=1;
     temp=OFF_TEMP;
   } else {
     mode=2;
-    wp=malloc(sizeof(*wp));
-    days=root["days"];
+    wp=(week_program)malloc(sizeof(*wp));
+    JsonArray& days=root["days"];
     for(i=0;i<7;i++) {
-      hours=days[i];
+      JsonArray& hours=days[i];
       n=hours.size();
       if(n!=0)
-        wp->days[i]=malloc(sizeof(*(wp->days[i])));
+        wp->days[i]=(day_wp)malloc(sizeof(*(wp->days[i])));
       else {
         wp->days[i]=NULL;
         continue;
       }
       wp->days[i]->n=n;
-      wp->days[i]->hours_intervals=malloc(sizeof(*(wp->days[i]->hours_intervals))) * n);
+      wp->days[i]->hours_intervals=(hour_dwp*)malloc(sizeof(*(wp->days[i]->hours_intervals)) * n);
       for(j=0;j<n;j++) {
-        hour_entry=hours[j];
+        JsonObject& hour_entry=hours[j];
         wp->days[i]->hours_intervals[j]->t=hour_entry["t"];
         wp->days[i]->hours_intervals[j]->hours[0]=hour_entry["h_i"];
         wp->days[i]->hours_intervals[j]->hours[1]=hour_entry["h_e"];
@@ -164,13 +166,13 @@ int get_hour_from_time(String times) {
 
 int get_day_of_the_week_from_time(String times) {
   String t = times.substring(0,3);
-  if(t=='Mon') return 0;
-  else if(t=='Tue') return 1;
-  else if(t=='Wed') return 2;
-  else if(t=='Thu') return 3;
-  else if(t=='Fri') return 4;
-  else if(t=='Sat') return 5;
-  else if(t=='Sun') return 6;
+  if(t=="Mon") return 0;
+  else if(t=="Tue") return 1;
+  else if(t=="Wed") return 2;
+  else if(t=="Thu") return 3;
+  else if(t=="Fri") return 4;
+  else if(t=="Sat") return 5;
+  else if(t=="Sun") return 6;
   return -1;
 }
 
@@ -240,7 +242,7 @@ void loop() {
   //TODO: read data from DHT11 sensor 
   float h = dht.readHumidity();
   float t = dht.readTemperature();
-  String json="{ \"Temp\": " + t + " , \"Hum\": " + h ;
+  String json="{ \"Temp\": " + String(t) + " , \"Hum\": " + String(h) ;
   
   //TODO: get time
   String time=getTime();
@@ -248,7 +250,10 @@ void loop() {
 
   //TODO: update relay status ON/OFF based on weekly temperature
   checkHeating(time, t);
-  json+=" , \"heating\": \"" + ((relay) ? "ON" : "OFF") + "\" }";
+  if(relay)
+    json+=" , \"heating\": \"ON\" }";
+   else
+    json+=" , \"heating\": \"OFF\" }";
   
   //TODO: publish data
   mqtt.publish(TOPIC_DATA, json , 0, 0);
@@ -256,5 +261,5 @@ void loop() {
   
   //TODO: some sort of low power mode -> sleep for n seconds
   Serial.println("Going into light sleep for 60 seconds");
-  delay(60e3)
+  delay(60e3);
 }
