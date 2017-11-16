@@ -42,7 +42,11 @@ typedef struct {
   day_wp days[7];
 } *week_program;
 
-int mode, temp;
+struct {
+  int dof, h, m;
+} time_struct;
+
+int mode, temp, c;
 boolean relay;
 week_program wp=NULL;
 
@@ -160,20 +164,22 @@ void updateConfig(String json_settings) {
   return;
 }
 
-int get_hour_from_time(String times) {
-  return (times.substring(17,19).toInt()) + GMT;
+void set_hour_from_time(String times) {
+  time_struct.h=(times.substring(17,19).toInt()) + GMT;
+  time_struct.m=(times.substring(20,22).toInt());
+  return;
 }
 
-int get_day_of_the_week_from_time(String times) {
+void set_day_of_the_week_from_time(String times) {
   String t = times.substring(0,3);
-  if(t=="Mon") return 0;
-  else if(t=="Tue") return 1;
-  else if(t=="Wed") return 2;
-  else if(t=="Thu") return 3;
-  else if(t=="Fri") return 4;
-  else if(t=="Sat") return 5;
-  else if(t=="Sun") return 6;
-  return -1;
+  if(t=="Mon") time_struct.dof=0;
+  else if(t=="Tue") time_struct.dof=1;
+  else if(t=="Wed") time_struct.dof=2;
+  else if(t=="Thu") time_struct.dof=3;
+  else if(t=="Fri") time_struct.dof=4;
+  else if(t=="Sat") time_struct.dof=5;
+  else if(t=="Sun") time_struct.dof=6;
+  return;
 }
 
 void set_relay(boolean value) {
@@ -185,22 +191,22 @@ void set_relay(boolean value) {
   return;
 }
 
-float get_temp_from_time(String times) {
+float get_temp_from_time() {
   if(mode!=2) return temp;
-  int dof=get_day_of_the_week_from_time(times),hour=get_hour_from_time(times),i;
-  day_wp d=wp->days[dof];
+  int i;
+  day_wp d=wp->days[time_struct.dof];
   hour_dwp hdwp;
   if(d==NULL) return OFF_TEMP;
   for(i=0;i<d->n;i++) {
     hdwp=d->hours_intervals[i];
-    if((hour >= hdwp->hours[0]) && (hour <= hdwp->hours[1]))
+    if((time_struct.h >= hdwp->hours[0]) && (time_struct.h <= hdwp->hours[1]))
       return hdwp->t;
   }
   return OFF_TEMP;
 }
 
-void checkHeating(String times, float t) {
-  if( ( t < (get_temp_from_time(times) - HYSTERESIS) ) || ( relay && ( t <= (get_temp_from_time(times) + HYSTERESIS) ) ) )
+void checkHeating(float t) {
+  if( ( t < (get_temp_from_time() - HYSTERESIS) ) || ( relay && ( t <= (get_temp_from_time() + HYSTERESIS) ) ) )
     set_relay(true);
   else
     set_relay(false);
@@ -208,6 +214,9 @@ void checkHeating(String times, float t) {
 }
 
 void setup() {
+  time_struct.dof=0;
+  time_struct.h=0;
+  time_struct.m=0;
   set_relay(false);
   Serial.begin(115200);
   initWifi();
@@ -234,6 +243,10 @@ void setup() {
 
   mqtt.begin("mqtt://test.mosquitto.org:1883");
 
+  String times=getTime();
+  set_hour_from_time(times);
+  set_day_of_the_week_from_time(times);
+
 }
 
 void loop() {
@@ -249,7 +262,7 @@ void loop() {
     json+=" , \"time\": " + time;
 
   //TODO: update relay status ON/OFF based on weekly temperature
-  checkHeating(time, t);
+  checkHeating(t);
   if(relay)
     json+=" , \"heating\": \"ON\" }";
    else
@@ -262,4 +275,18 @@ void loop() {
   //TODO: some sort of low power mode -> sleep for n seconds
   Serial.println("Going into light sleep for 60 seconds");
   delay(60e3);
+  //update time info
+  if((++c)<=60){
+    if(++(time_struct.m)>=60) {
+      if(++(time_struct.h)>=24) {
+        time_struct.dof=(++time_struct.dof)%7;
+        time_struct.m=time_struct.m%60;
+        time_struct.h=time_struct.h%24;
+      }
+    }
+  } else {
+    String times=getTime();
+    set_hour_from_time(times);
+    set_day_of_the_week_from_time(times);
+  }
 }
