@@ -1,10 +1,11 @@
-#include <ESP8266MQTTClient.h>
+#include <PubSubClient.h> 
+#include <stdlib.h>
 #include <ESP8266WiFi.h>
 #include <ArduinoJson.h>
 #include "DHT.h"
 
-#define DHTPIN 2      // what digital pin DHT is connected to
-#define RELAYPIN 10   // what digital pin RELAY is connected to
+#define DHTPIN 5      // what digital pin DHT is connected to
+#define RELAYPIN 16   // what digital pin RELAY is connected to
 
 #define DHTTYPE DHT11   // DHT 11
 #define GMT 1
@@ -21,12 +22,10 @@ const float OFF_TEMP=-127.0;
 
 DHT dht(DHTPIN, DHTTYPE);
 
-MQTTClient mqtt;
-
 const char* TOPIC_SETTINGS="/thermostat/config";
-const char* TOPIC_DATA="/thermostat/sensor";
-const char* WIFI_SSID="ssid";
-const char* WIFI_PASS="pswd";
+const char* TOPIC_DATA="/thermostat/status";
+const char* WIFI_SSID="TP-LINK_......";
+const char* WIFI_PASS=".....";
 
 typedef struct {
   int hours[2]; //ora inizio (indice 0) e ora dine (indice 1)
@@ -49,12 +48,54 @@ struct {
 int mode, temp, c;
 boolean relay;
 week_program wp=NULL;
+char json[100];
+
+const char *mqtt_server = "....cloudmqtt.com";
+const int mqtt_port = 15739;
+const char *mqtt_user = "thermostat";
+const char *mqtt_pass = ".........";
+const char *mqtt_client_name = "Thermostat"; // Client connections cant have the same connection name
+ 
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.println("Message arrived:");
+  if(!strcmp(topic, TOPIC_SETTINGS)) {
+    Serial.println("Message arrived:");
+    for (int i = 0; i < length; i++) {
+      Serial.print((char)payload[i]);
+    }
+    Serial.println();
+  }
+}
+
+void reconnect() {
+  Serial.println("Reconnecting...");
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("Thermostat-esp8266", mqtt_user, mqtt_pass)) {
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      // ... and resubscribe
+      Serial.println(client.subscribe(TOPIC_SETTINGS));
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      //delay(5000);
+    }
+  }
+}
 
 
 void initWifi() {
    Serial.print("Connecting to ");
-   Serial.print(WIFI_SSID);
-   WiFi.mode(WIFI_STA);
+   Serial.println(WIFI_SSID);
    //wifi_set_sleep_type(LIGHT_SLEEP_T);
    if (WiFi.SSID() != WIFI_SSID) {
        WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -74,27 +115,26 @@ void initWifi() {
 }
 
 String getTime() {
-  WiFiClient client;
-  while (!!!client.connect("google.com", 80)) {
+  while (!!!espClient.connect("google.com", 80)) {
     Serial.println("connection failed, retrying...");
   }
 
-  client.print("HEAD / HTTP/1.1\r\n\r\n");
+  espClient.print("HEAD / HTTP/1.1\r\n\r\n");
  
-  while(!!!client.available()) {
+  while(!!!espClient.available()) {
      yield();
   }
 
-  while(client.available()){
-    if (client.read() == '\n') {   
-      if (client.read() == 'D') {   
-        if (client.read() == 'a') {   
-          if (client.read() == 't') {   
-            if (client.read() == 'e') {   
-              if (client.read() == ':') {   
-                client.read();
-                String theDate = client.readStringUntil('\r');
-                client.stop();
+  while(espClient.available()){
+    if (espClient.read() == '\n') {   
+      if (espClient.read() == 'D') {   
+        if (espClient.read() == 'a') {   
+          if (espClient.read() == 't') {   
+            if (espClient.read() == 'e') {   
+              if (espClient.read() == ':') {   
+                espClient.read();
+                String theDate = espClient.readStringUntil('\r');
+                espClient.stop();
                 return theDate;
               }
             }
@@ -125,6 +165,7 @@ void updateConfig(String json_settings) {
   int i,j,n;
   StaticJsonBuffer<1024> jsonBuffer;
   JsonObject& root = jsonBuffer.parseObject(json_settings);
+  Serial.println("UC 1");
   //JsonObject hour_entry;
 //  JsonArray& days, hours;
   if (!root.success())
@@ -132,6 +173,7 @@ void updateConfig(String json_settings) {
     Serial.println("parseObject() failed");
     return;
   }
+  Serial.println("UC 2");
   if(root["mode"] == "OFF") {
     mode=0;
     temp=root["t"];
@@ -139,12 +181,16 @@ void updateConfig(String json_settings) {
     mode=1;
     temp=OFF_TEMP;
   } else {
+    Serial.println("UC 3");
     mode=2;
     wp=(week_program)malloc(sizeof(*wp));
     JsonArray& days=root["days"];
+    Serial.println("UC 4");
     for(i=0;i<7;i++) {
       JsonArray& hours=days[i];
       n=hours.size();
+      Serial.print("UC 4 - ");
+      Serial.println(n);
       if(n!=0)
         wp->days[i]=(day_wp)malloc(sizeof(*(wp->days[i])));
       else {
@@ -152,12 +198,19 @@ void updateConfig(String json_settings) {
         continue;
       }
       wp->days[i]->n=n;
-      wp->days[i]->hours_intervals=(hour_dwp*)malloc(sizeof(*(wp->days[i]->hours_intervals)) * n);
+      wp->days[i]->hours_intervals=(hour_dwp*)malloc(sizeof(hour_dwp) * n);
       for(j=0;j<n;j++) {
         JsonObject& hour_entry=hours[j];
-        wp->days[i]->hours_intervals[j]->t=hour_entry["t"];
+        Serial.print("UC 5 - ");
+        hour_entry.printTo(Serial);
+        Serial.println("");
+        wp->days[i]->hours_intervals[j]=(hour_dwp)malloc(sizeof(*(wp->days[i]->hours_intervals[j])));
+        (wp->days[i]->hours_intervals[j])->t=hour_entry["t"];
+        Serial.println("UC 6");
         wp->days[i]->hours_intervals[j]->hours[0]=hour_entry["h_i"];
+        Serial.println("UC 7"); 
         wp->days[i]->hours_intervals[j]->hours[1]=hour_entry["h_e"];
+        Serial.println("UC 8");
       }
     }
   }
@@ -194,11 +247,21 @@ void set_relay(boolean value) {
 float get_temp_from_time() {
   if(mode!=2) return temp;
   int i;
+  Serial.print("DOF: ");
+  Serial.println(time_struct.dof);
   day_wp d=wp->days[time_struct.dof];
   hour_dwp hdwp;
   if(d==NULL) return OFF_TEMP;
   for(i=0;i<d->n;i++) {
     hdwp=d->hours_intervals[i];
+    Serial.print("Hour: ");
+    Serial.print(time_struct.h);
+    Serial.print(" >= ");
+    Serial.print(hdwp->hours[0]);
+    Serial.print(" <= ");
+    Serial.print(hdwp->hours[1]);
+    Serial.print(" @ ");
+    Serial.println(hdwp->t);
     if((time_struct.h >= hdwp->hours[0]) && (time_struct.h <= hdwp->hours[1]))
       return hdwp->t;
   }
@@ -206,6 +269,8 @@ float get_temp_from_time() {
 }
 
 void checkHeating(float t) {
+  Serial.print("Temp from time: ");
+  Serial.println(get_temp_from_time());
   if( ( t < (get_temp_from_time() - HYSTERESIS) ) || ( relay && ( t <= (get_temp_from_time() + HYSTERESIS) ) ) )
     set_relay(true);
   else
@@ -218,75 +283,83 @@ void setup() {
   time_struct.h=0;
   time_struct.m=0;
   set_relay(false);
-  Serial.begin(115200);
+  Serial.begin(9600);
   initWifi();
+  client.setServer(mqtt_server, 15739);
+  client.setCallback(callback);
 
   dht.begin();
 
   mode=0; //start with OFF
   
-  //topic, data, data is continuing
-  mqtt.onData([](String topic, String data, bool cont) {
-    Serial.printf("Data received, topic: %s, data: %s\r\n", topic.c_str(), data.c_str());
-    if(topic.c_str() == TOPIC_SETTINGS)
-      updateConfig(data.c_str());
-  });
-
-  mqtt.onSubscribe([](int sub_id) {
-    Serial.printf("Subscribe topic id: %d ok\r\n", sub_id);
-  });
-  
-  mqtt.onConnect([]() {
-    Serial.printf("MQTT: Connected\r\n");
-    Serial.printf("Subscribe id: %d\r\n", mqtt.subscribe(TOPIC_SETTINGS));
-  });
-
-  mqtt.begin("mqtt://test.mosquitto.org:1883");
 
   String times=getTime();
   set_hour_from_time(times);
   set_day_of_the_week_from_time(times);
+  Serial.println("Time: " + times);
 
+  Serial.println("Trying taking config");
+  updateConfig("{ \"mode\": \"WP\", \"days\": [[{\"t\": 27.0, \"h_i\":8, \"h_e\": 22}],[{\"t\": 27.0, \"h_i\":8, \"h_e\": 22}],[{\"t\": 27.0, \"h_i\":8, \"h_e\": 22}],[{\"t\": 27.0, \"h_i\":8, \"h_e\": 22}],[{\"t\": 27.0, \"h_i\":8, \"h_e\": 22}],[{\"t\": 19.0, \"h_i\":8, \"h_e\": 15}, {\"t\": 25.0, \"h_i\":16, \"h_e\": 22}],[{\"t\": 22.0, \"h_i\":8, \"h_e\": 22}]] }");
+  checkHeating(21.0);
 }
 
 void loop() {
-  mqtt.handle();
+  Serial.println("Going into light sleep for 60 seconds");
+  delay(59900);
+  if (WiFi.status() != WL_CONNECTED)
+    initWifi();
+    
+  if(!client.connected())
+    reconnect();
 
+  delay(100);
+  client.loop();
+    
   //TODO: read data from DHT11 sensor 
   float h = dht.readHumidity();
   float t = dht.readTemperature();
-  String json="{ \"Temp\": " + String(t) + " , \"Hum\": " + String(h) ;
+  Serial.print("Hum: ");
+  Serial.println(h);
+  Serial.print("Temp: ");
+  Serial.println(t);
   
   //TODO: get time
-  String time=getTime();
-    json+=" , \"time\": " + time;
+  Serial.print("Day of time: ");
+  Serial.println(time_struct.dof);
+  Serial.print("Hour: ");
+  Serial.println(time_struct.h);
+  Serial.print("Minute: ");
+  Serial.println(time_struct.m);
 
   //TODO: update relay status ON/OFF based on weekly temperature
   checkHeating(t);
   if(relay)
-    json+=" , \"heating\": \"ON\" }";
+    sprintf(json,"{ \"Temp\": %d.%02d , \"Hum\": %d.%02d , \"heating\": \"%s\" }",(int)t, ((int)(t*100)%100),(int)h, ((int)(h*100)%100),"ON");
    else
-    json+=" , \"heating\": \"OFF\" }";
-  
-  //TODO: publish data
-  mqtt.publish(TOPIC_DATA, json , 0, 0);
+    sprintf(json,"{ \"Temp\": %d.%02d , \"Hum\": %d.%02d , \"heating\": \"%s\" }",(int)t, ((int)(t*100)%100),(int)h, ((int)(h*100)%100),"OFF");
 
-  
+  Serial.println(json);
+  //TODO: publish data
+  Serial.println("Publishing data");
+  client.publish(TOPIC_DATA, json, true);
+
   //TODO: some sort of low power mode -> sleep for n seconds
-  Serial.println("Going into light sleep for 60 seconds");
-  delay(60e3);
   //update time info
-  if((++c)<=60){
+  if((++c)<=10){
     if(++(time_struct.m)>=60) {
       if(++(time_struct.h)>=24) {
         time_struct.dof=(++time_struct.dof)%7;
-        time_struct.m=time_struct.m%60;
-        time_struct.h=time_struct.h%24;
       }
+      time_struct.m=time_struct.m%60;
+      time_struct.h=time_struct.h%24;
     }
   } else {
+    c=0;
     String times=getTime();
     set_hour_from_time(times);
     set_day_of_the_week_from_time(times);
+    Serial.println("Time: " + times);
   }
+  client.unsubscribe(TOPIC_SETTINGS);
+  client.disconnect();
 }
